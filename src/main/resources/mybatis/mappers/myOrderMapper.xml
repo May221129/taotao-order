@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.taotao.store.order.mapper.OrderMapper">
+
+	<!-- ================================================== select =========================================================== -->
+	
+	<!-- association分步查询：自定义Order对象结果集映射 -->
+	<resultMap type="com.taotao.store.order.pojo.Order" id="myOrderResultMap" autoMapping="true">
+		<id column="order_id" property="orderId"/>
+		<!-- 通过autoMapping="true"，开启了字段和属性的自动映射，所以其他非主键字段的映射关系可以不写。 -->
+		<!-- association定义关联对象的封装规则：
+			 select:表明property的属性，是调用select指定的方法所查出的结果；
+			 column:指定将哪一列的值传给这个select中的getDepartmentById方法. -->
+		<association property="orderItems" 
+			select="selectOrderItemsByOrderId"
+			column="order_id">
+		</association>
+		<association property="orderShipping" 
+			select="selectOrderShippingById"
+			column="order_id">
+		</association>
+	</resultMap>
+	<!-- 使用association可以延迟加载：
+		 order对象中，包含了orderShipping属性和orderItems属性，我们每次查询order对象时，都将它们一起查询出来了。
+		 改进：订单商品快照和订单物流地址信息在我们使用的时候再去查询。
+		 实现：在分段查询的基础上，在全局配置文件中加上两个配置【①lazyLoadingEnabled:延迟加载； ②aggressiveLazyLoading：侵入延迟加载。】-->
+	<!-- 根据订单id查询商品快照 -->
+	
+	<select id="selectOrderItemsByOrderId" resultType="com.taotao.store.order.pojo.OrderItem">
+		SELECT * FROM tb_order_item WHERE order_id = #{orderId}
+	</select>
+	
+	<!-- 根据订单id查询物流地址信息 -->
+	<select id="selectOrderShippingById" resultType="com.taotao.store.order.pojo.OrderShipping">
+		SELECT * FROM tb_order_shipping WHERE order_id = #{orderId}
+	</select>
+	
+	<!-- 根据订单id查询订单：利用resultType="myOrderResultMap"完成分步查询 -->
+	<select id="selectOrderByOrderId" resultMap="myOrderResultMap">
+		SELECT * FROM tb_order WHERE order_id = #{orderId}
+	</select>
+	
+	<!-- 根据用户昵称分页查询订单，有使用到PageHelper插件，所以就不自己写limit了。 -->
+	<!-- 返回的结果最好是按照创建时间倒序排序 -->
+	<select id="selectOrderByBuyerNick" resultMap="myOrderResultMap">
+		SELECT * FROM tb_order WHERE buyer_nick LIKE #{buyerNick} ORDER BY create_time DESC
+	</select>
+	
+	<!-- ================================================== insert ============================================================ -->
+	
+	<!-- 新增订单，同时也新增商品快照和收货地址： -->
+	<!-- 注意：
+		 1.新增商品快照时，order_id字段是用orderId，而非orderItem.orderId。
+		  因为orderId是service中自己写的，而非数据库自增长的，所以orderItem对象中该字段为null，需要用order对象的。
+		 2.新增收货地址时，order_id、created、updated这三个字段也一样。
+		 3.在这个insert标签中，写了3个insert语句，这个需要在jdbc.properties文件中配置jdbc.url==》allowMultiQueries=true（允许多条SQL语句一起执行）。
+	==》  1、2两点，还有另外一个处理方式，在TaotaoResult com.taotao.store.order.service.OrderService.create(String jsonData)方法中
+		 （即接收参数的方法中）对order.orderItem和order.orderShipping的上面提到的属性进行赋值。-->
+	<insert id="insertOrder" parameterType="com.taotao.store.order.pojo.Order">
+		INSERT INTO
+		tb_order(
+		order_id, payment, payment_type, post_fee, status, create_time, 
+		update_time, payment_time, consign_time, end_time, close_time, shipping_name, 
+		shipping_code, user_id, buyer_message, buyer_nick, buyer_rate
+		) 
+		VALUES(
+		#{orderId}, #{payment}, #{paymentType}, #{postFee}, #{status}, #{createTime}, 
+		#{updateTime}, #{paymentTime}, #{consignTime}, #{endTime}, #{closeTime}, #{shippingName}, 
+		#{shippingCode}, #{userId}, #{buyerMessage}, #{buyerNick}, #{buyerRate}
+		);
+		
+		INSERT INTO 
+		tb_order_item(item_id, order_id, num, title, price, total_fee, pic_path)
+		VALUES 
+		<foreach collection="orderItems" item="orderItem" separator=",">
+			<!-- 因为在接收参数的方法中进行初始化了，所以这里的orderId属性就用orderItem自己的属性。
+			(#{orderItem.itemId}, #{orderId}, #{orderItem.num}, #{orderItem.title}, #{orderItem.price}, #{orderItem.totalFee}, #{orderItem.picPath})
+			 -->
+			(#{orderItem.itemId}, #{orderItem.orderId}, #{orderItem.num}, #{orderItem.title}, #{orderItem.price}, #{orderItem.totalFee}, #{orderItem.picPath})
+		</foreach>
+		;
+		
+		INSERT INTO
+		tb_order_shipping(
+		order_id, receiver_name, receiver_phone, receiver_mobile, receiver_state, 
+		receiver_city, receiver_district, receiver_address, receiver_zip, created, updated
+		) 
+		VALUES(
+		<!-- 注释掉的原因同上orderItem
+		#{orderId}, #{orderShipping.receiverName}, #{orderShipping.receiverPhone}, #{orderShipping.receiverMobile}, 
+		#{orderShipping.receiverState}, #{orderShipping.receiverCity}, #{orderShipping.receiverDistrict}, 
+		#{orderShipping.receiverAddress}, #{orderShipping.receiverZip}, #{createTime}, #{updateTime}
+		 -->
+		#{orderShipping.orderId}, #{orderShipping.receiverName}, #{orderShipping.receiverPhone}, #{orderShipping.receiverMobile}, 
+		#{orderShipping.receiverState}, #{orderShipping.receiverCity}, #{orderShipping.receiverDistrict}, 
+		#{orderShipping.receiverAddress}, #{orderShipping.receiverZip}, #{orderShipping.created}, #{orderShipping.updated}
+		);
+	</insert>
+	
+	<!-- ================================================== update ============================================================ -->
+	
+	<!-- 修改订单状态（更改付款状态、时间） -->
+	<update id="updateOrderByOrderId" parameterType="com.taotao.store.order.pojo.Order">
+		UPDATE tb_order 
+		<trim prefix="SET" suffixOverrides=",">
+			<if test="payment != null and payment != ''"> payment = #{payment}, </if>
+			<if test="paymentType != null and paymentType != ''"> payment_type = #{paymentType}, </if>
+			<if test="postFee != null and postFee != ''"> post_fee = #{postFee}, </if>
+			<if test="status != null and status != ''"> `status` = #{status}, </if>
+			<if test="updateTime != null and updateTime != ''"> `update_time` = #{updateTime}, </if>
+			<if test="paymentTime != null and paymentTime != ''"> `payment_time` = #{paymentTime}, </if>
+			<if test="consignTime != null and consignTime != ''"> consign_time = #{consignTime}, </if>
+			<if test="endTime != null and endTime != ''"> end_time = #{endTime}, </if>
+			<if test="closeTime != null and closeTime != ''"> close_time = #{closeTime}, </if>
+			<if test="shippingName != null and shippingName != ''"> shipping_name = #{shippingName}, </if>
+			<if test="shippingCode != null and shippingCode != ''"> shipping_code = #{shippingCode}, </if>
+			<if test="buyerMessage != null and buyerMessage != ''"> buyer_message = #{buyerMessage}, </if>
+			<if test="buyerRate != null and buyerRate != ''"> buyer_rate = #{buyerRate}, </if>
+			<if test="orderShipping != null and orderShipping != ''">
+				UPDATE tb_order_shipping
+				<trim prefix="SET" suffixOverrides=",">
+					<if test="receiverName != null and receiverName != ''"> receiver_name = #{receiverName}, </if>
+					<if test="receiverPhone != null and receiverPhone != ''"> receiver_phone = #{receiverPhone}, </if>
+					<if test="receiverMobile != null and receiverMobile != ''"> receiver_mobile = #{receiverMobile}, </if>
+					<if test="receiverState != null and receiverState != ''"> receiver_state = #{receiverState}, </if>
+					<if test="receiverCity != null and receiverCity != ''"> receiver_city = #{receiverCity}, </if>
+					<if test="receiverDistrict != null and receiverDistrict != ''"> receiver_district = #{receiverDistrict}, </if>
+					<if test="receiverAddress != null and receiverAddress != ''"> receiver_address = #{receiverAddress}, </if>
+					<if test="receiverZip != null and receiverZip != ''"> receiver_zip = #{receiverZip}, </if>
+					<if test="updated != null and updated != ''"> updated = #{updated} </if>
+				</trim>
+				WHERE order_id=#{orderId};
+			</if>
+		</trim>
+		WHERE order_id=#{orderId};
+	</update>
+	
+	<!-- 
+	
+	
+	<update id="updateOrderByOrderId" parameterType="com.taotao.store.order.pojo.Order">
+		UPDATE tb_order 
+		SET `status` = #{status}, `update_time` = #{updateTime}, `payment_time` = #{paymentTime}
+		WHERE order_id = #{orderId};
+	</update>
+	 -->
+</mapper>
