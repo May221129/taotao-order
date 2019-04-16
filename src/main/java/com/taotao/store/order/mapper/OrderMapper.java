@@ -3,7 +3,6 @@ package com.taotao.store.order.mapper;
 import java.util.List;
 
 import com.taotao.store.order.pojo.Order;
-import com.taotao.store.order.pojo.OrderShipping;
 
 /**
  * 1.提问：这里的OrderMapper为什么是接口，而非具体的实现类？
